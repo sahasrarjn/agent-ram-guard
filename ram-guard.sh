@@ -1,5 +1,5 @@
 #!/bin/bash
-# RAM guard for Claude Code hooks (macOS).
+# RAM guard for coding-agent hooks (Claude Code, Codex) on macOS.
 #   ram-guard.sh pre   PreToolUse(Bash): hold or deny memory-heavy commands while RAM is critical
 #   ram-guard.sh post  PostToolUse(Bash): throttled warning + log, tells agents to close their own processes
 #   ram-guard.sh status | top   manual inspection
@@ -10,7 +10,7 @@ WAIT_SECS=${RAM_WAIT_SECS:-120}
 SWAP_WARN=${RAM_WARN_SWAP_GB:-5}
 SWAP_BLOCK=${RAM_BLOCK_SWAP_GB:-7}
 SWAP_FLOOR_PCT=${RAM_SWAP_BLOCK_MIN_USED_PCT:-85}
-LOG=~/.claude/ram-log.tsv
+LOG=${RAM_GUARD_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/ram-guard/ram-log.tsv}
 HEAVY='(^|[;&| ]|xargs )(next (dev|build)|bun (run )?(dev|build|test)|npm run (dev|build|test)|yarn (dev|build|test)|pnpm (dev|build|test)|vite|tsc|jest|mypy|next start|make (dev|test|run)|uvicorn|pytest|python[0-9.]* -m (pytest|uvicorn)|docker([ -]compose)? (up|run)|scripts/dev|playwright|xcodebuild|cargo build|gradlew)'
 
 used_pct() {
@@ -88,7 +88,7 @@ $(top_procs 6)"
 
   post)
     sid=$(jq -r '.session_id // "x"' <<<"$input")
-    stamp="${TMPDIR:-/tmp}/claude-ram-$sid"
+    stamp="${TMPDIR:-/tmp}/ram-guard-$sid"
     now=$(date +%s)
     [ -f "$stamp" ] && [ $((now - $(stat -f %m "$stamp"))) -lt 300 ] && exit 0
     touch "$stamp"
