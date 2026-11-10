@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "agent-ram-guard",
+  "description": "Keeps parallel coding agents from running a Mac out of RAM.",
+  "owner": {
+    "name": "Sahasra Ranjan"
+  },
+  "plugins": [
+    {
+      "name": "ram-guard",
+      "source": "./plugins/ram-guard",
+      "description": "Holds memory-heavy shell commands while RAM is critical and warns agents to stop their own dev servers and test runs. macOS, needs jq.",
+      "category": "productivity"
+    }
+  ]
+}

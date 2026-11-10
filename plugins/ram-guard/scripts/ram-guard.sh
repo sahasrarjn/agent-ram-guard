@@ -2,6 +2,7 @@
 # RAM guard for coding-agent hooks (Claude Code, Codex) on macOS.
 #   ram-guard.sh pre   PreToolUse(Bash): hold or deny memory-heavy commands while RAM is critical
 #   ram-guard.sh post  PostToolUse(Bash): throttled warning + log, tells agents to close their own processes
+#   ram-guard.sh session  SessionStart: injects the RAM rules for the agent
 #   ram-guard.sh status | top   manual inspection
 # Thresholds are "used %" as Activity Monitor counts it (app + wired + compressed).
 WARN=${RAM_WARN_USED_PCT:-90}
@@ -69,6 +70,11 @@ case $mode in pre|post) input=$(cat) ;; esac
 
 case $mode in
   status) echo "RAM used $(used_pct)%, swap $(swap_gb) GB"; top_procs 8 ;;
+  session)
+    self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+    rules="RAM rules (ram-guard): Every process you start (dev servers, test runs, containers, browsers) is yours to stop. Note its PID and stop it when you are done. Never kill a process you did not start. Before starting something heavy, run \`\"$self\" status\`; if RAM is at or above ${WARN}%, close your own idle processes first."
+    jq -n --arg r "$rules" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$r}}'
+    ;;
   top) top_procs 10 ;;
 
   pre)
