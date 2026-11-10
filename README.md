@@ -7,26 +7,53 @@ When several agents share one machine, each one starts its own dev server, test 
 - **Before** a memory-heavy shell command (`pytest`, `next dev`, `docker compose up`, `tsc`, `uvicorn`, ...), it checks RAM. If memory is critical it waits up to 2 minutes for it to drop, then denies the command and tells the agent to stop the processes it started itself.
 - **After** any shell command (at most once every 5 minutes per session), it logs a sample and, if RAM or swap is high, warns the agent with the top processes by memory, tagged with the git worktree they belong to.
 
-Claude Code and Codex use the same hook input and output format, so one script serves both.
+Claude Code and Codex use the same hook input and output format, so one script serves both. macOS only (it reads `vm_stat`, `sysctl` and `ps`). Needs `jq`.
 
-macOS only (it reads `vm_stat`, `sysctl` and `ps`). Needs `jq`.
+## Quick setup
 
-## Install
+Ask your agent:
+
+> Set up https://github.com/sahasrarjn/agent-ram-guard globally for Claude Code and Codex, following its README.
+
+Or run the installer yourself:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sahasrarjn/agent-ram-guard/main/install.sh | bash
 ```
 
-The installer copies `ram-guard.sh` to `~/.local/bin/` and registers the hooks for each tool it finds:
+It copies `ram-guard.sh` to `~/.local/bin/` and registers the hooks for each tool it finds (`~/.claude`, `~/.codex`). It backs up each file it changes (`*.bak-ram-guard`) and leaves a tool alone if it already references `ram-guard.sh`, so re-running is safe.
 
-- **Claude Code** (`~/.claude` exists): adds `PreToolUse` and `PostToolUse` Bash hooks to `~/.claude/settings.json`.
-- **Codex** (`~/.codex` exists): appends the same hooks to `~/.codex/config.toml`. Then open `codex` and run `/hooks` to review and trust them, because Codex skips hooks you haven't trusted.
+## Setup instructions for agents
 
-It backs up each file it changes (`*.bak-ram-guard`) and does nothing to a tool that's already configured, so re-running is safe.
+If you are a coding agent asked to set this up, do these steps in order and report what you changed.
 
-### Manual setup
+1. Check the machine is macOS and `jq` is installed (`brew install jq` if not).
+2. Look for an existing setup: `grep -n ram-guard ~/.claude/settings.json ~/.codex/config.toml`. If a hook already points at a `ram-guard.sh` somewhere other than `~/.local/bin/`, ask the user whether to replace it before going on; the installer skips a tool that already has one.
+3. Run the installer (the `curl ... | bash` line above).
+4. Self-test the script. This must print JSON containing `"permissionDecision": "deny"`:
+   ```bash
+   echo '{"tool_input":{"command":"pytest"}}' | RAM_BLOCK_USED_PCT=1 RAM_WAIT_SECS=0 ~/.local/bin/ram-guard.sh pre
+   ```
+5. Add the RAM rules below to the global instructions file of each tool that was set up, unless a `# RAM` section is already there: `~/.claude/CLAUDE.md` for Claude Code, `~/.codex/AGENTS.md` for Codex.
+6. Tell the user:
+   - Claude Code picks up the hooks in new sessions; restart open ones.
+   - **Codex skips new hooks until they are trusted.** The user must open `codex` and run `/hooks` to review and trust them. You cannot do this step for them.
 
-Claude Code, in `~/.claude/settings.json`:
+The RAM rules:
+
+```markdown
+# RAM
+
+- Every process you start (dev servers, test runs, containers, browsers) is yours to stop. Note its PID and stop it when you are done.
+- Never kill a process you did not start.
+- Before starting something heavy, run `~/.local/bin/ram-guard.sh status`. If RAM is at or above 90%, close your own idle processes first.
+```
+
+## Manual setup
+
+### Claude Code
+
+Add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -41,7 +68,11 @@ Claude Code, in `~/.claude/settings.json`:
 }
 ```
 
-Codex, in `~/.codex/config.toml` (use the absolute path), then `/hooks` in Codex to trust:
+Merge into any existing `hooks` block rather than replacing it. Add the RAM rules to `~/.claude/CLAUDE.md`.
+
+### Codex
+
+Add to `~/.codex/config.toml`, with the absolute path to the script:
 
 ```toml
 [[hooks.PreToolUse]]
@@ -60,19 +91,9 @@ command = "/Users/<you>/.local/bin/ram-guard.sh post"
 timeout = 10
 ```
 
-Keep the `pre` timeout above `RAM_WAIT_SECS` so the hook can finish waiting.
+Then open `codex` and run `/hooks` to trust them. Add the RAM rules to `~/.codex/AGENTS.md`.
 
-### Tell the agents the rules (optional)
-
-Add to `~/.claude/CLAUDE.md` and/or `~/.codex/AGENTS.md`:
-
-```markdown
-# RAM
-
-- Every process you start (dev servers, test runs, containers, browsers) is yours to stop. Note its PID and stop it when you are done.
-- Never kill a process you did not start.
-- Before starting something heavy, run `~/.local/bin/ram-guard.sh status`. If RAM is at or above 90%, close your own idle processes first.
-```
+In both tools, keep the `pre` timeout above `RAM_WAIT_SECS` so the hook can finish waiting.
 
 ## Manual use
 
@@ -105,7 +126,7 @@ Which commands count as heavy is the `HEAVY` regex near the top of the script. C
 
 ## Uninstall
 
-Remove the `ram-guard.sh` entries from `~/.claude/settings.json` and `~/.codex/config.toml`, then `rm ~/.local/bin/ram-guard.sh`.
+Remove the `ram-guard.sh` entries from `~/.claude/settings.json` and `~/.codex/config.toml`, delete the `# RAM` section from `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, then `rm ~/.local/bin/ram-guard.sh`.
 
 ## License
 
