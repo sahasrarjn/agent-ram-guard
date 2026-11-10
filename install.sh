@@ -3,7 +3,7 @@
 # Safe to re-run: a tool that already references ram-guard.sh is left alone.
 set -euo pipefail
 
-SRC_URL=https://raw.githubusercontent.com/sahasrarjn/agent-ram-guard/main/ram-guard.sh
+SRC_URL=https://raw.githubusercontent.com/sahasrarjn/agent-ram-guard/main/plugins/ram-guard/scripts/ram-guard.sh
 DEST="$HOME/.local/bin/ram-guard.sh"
 
 [ "$(uname)" = Darwin ] || { echo "ram-guard supports macOS only." >&2; exit 1; }
@@ -11,8 +11,8 @@ command -v jq >/dev/null || { echo "ram-guard needs jq (brew install jq)." >&2; 
 
 mkdir -p "$(dirname "$DEST")"
 here=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)
-if [ -n "$here" ] && [ -f "$here/ram-guard.sh" ]; then
-  cp "$here/ram-guard.sh" "$DEST"
+if [ -n "$here" ] && [ -f "$here/plugins/ram-guard/scripts/ram-guard.sh" ]; then
+  cp "$here/plugins/ram-guard/scripts/ram-guard.sh" "$DEST"
 else
   curl -fsSL "$SRC_URL" -o "$DEST"
 fi

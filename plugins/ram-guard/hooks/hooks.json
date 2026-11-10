@@ -1,0 +1,28 @@
+{
+  "description": "Holds memory-heavy shell commands while RAM is critical and warns agents when RAM or swap is high.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/ram-guard.sh\" session", "timeout": 10 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/ram-guard.sh\" pre", "timeout": 150, "statusMessage": "Checking RAM..." }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/ram-guard.sh\" post", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

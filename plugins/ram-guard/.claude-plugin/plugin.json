@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "ram-guard",
+  "version": "1.0.0",
+  "description": "Holds memory-heavy shell commands while RAM is critical and warns agents to stop their own dev servers and test runs. macOS, needs jq.",
+  "author": {
+    "name": "Sahasra Ranjan"
+  },
+  "homepage": "https://github.com/sahasrarjn/agent-ram-guard",
+  "repository": "https://github.com/sahasrarjn/agent-ram-guard",
+  "license": "MIT",
+  "keywords": ["ram", "memory", "macos", "hook", "parallel-agents", "codex"]
+}
