@@ -9,7 +9,7 @@
     {
       "name": "ram-guard",
       "source": "./plugins/ram-guard",
-      "description": "Holds memory-heavy shell commands while RAM is critical and warns agents to stop their own dev servers and test runs. macOS, needs jq.",
+      "description": "Holds memory-heavy shell commands while RAM is critical and tells coding agents to stop their own dev servers and test runs. macOS, needs jq.",
       "category": "productivity"
     }
   ]
