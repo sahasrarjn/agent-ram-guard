@@ -1,9 +1,11 @@
 #!/bin/bash
-# RAM guard for coding-agent hooks (Claude Code, Codex) on macOS.
-#   ram-guard.sh pre   PreToolUse(Bash): hold or deny memory-heavy commands while RAM is critical
-#   ram-guard.sh post  PostToolUse(Bash): throttled warning + log, tells agents to close their own processes
-#   ram-guard.sh session  SessionStart: injects the RAM rules for the agent
-#   ram-guard.sh status | top   manual inspection
+# RAM guard for coding-agent hooks on macOS.
+#   ram-guard.sh pre [harness]      before a shell command: hold or deny memory-heavy commands while RAM is critical
+#   ram-guard.sh post [harness]     after a shell command: throttled warning + log, tells agents to close their own processes
+#   ram-guard.sh session [harness]  session start: injects the RAM rules for the agent
+#   ram-guard.sh status | top       manual inspection
+# harness picks the hook output format: claude (default; also Codex and pi), cursor, gemini, antigravity.
+# For antigravity, register `post` on PreInvocation: its PostToolUse hooks cannot add context.
 # Thresholds are "used %" as Activity Monitor counts it (app + wired + compressed).
 WARN=${RAM_WARN_USED_PCT:-90}
 BLOCK=${RAM_BLOCK_USED_PCT:-95}
@@ -65,21 +67,58 @@ log_sample() {
 }
 
 mode=${1:-status}
+fmt=${2:-claude}
 input=""
-case $mode in pre|post) input=$(cat) ;; esac
+case $mode in pre|post|session) [ -t 0 ] || input=$(cat) ;; esac
+
+# The shell command, from Claude Code/Codex/Gemini (tool_input.command), Cursor (command) or Antigravity (toolCall.args.CommandLine).
+command_of() { jq -r '.tool_input.command // .command // .toolCall.args.CommandLine // ""' <<<"$input" 2>/dev/null; }
+session_of() { jq -r '.session_id // .conversation_id // .conversationId // "x"' <<<"$input" 2>/dev/null; }
+
+# Tell the agent something: $1 = session|post, $2 = text.
+emit_context() {
+  case $fmt in
+    cursor) jq -n --arg m "$2" '{additional_context:$m}' ;;
+    gemini)
+      local ev=AfterTool; [ "$1" = session ] && ev=SessionStart
+      jq -n --arg e "$ev" --arg m "$2" '{hookSpecificOutput:{hookEventName:$e,additionalContext:$m}}' ;;
+    antigravity) jq -n --arg m "$2" '{injectSteps:[{systemMessage:{systemMessage:$m}}]}' ;;
+    *)
+      local ev=PostToolUse; [ "$1" = session ] && ev=SessionStart
+      jq -n --arg e "$ev" --arg m "$2" '{hookSpecificOutput:{hookEventName:$e,additionalContext:$m}}' ;;
+  esac
+}
+
+# Nothing to say. Cursor and Antigravity expect a JSON object from every hook; the others accept empty output.
+# Antigravity's PreToolUse treats a missing or empty decision as deny. "allow" only means this hook does not
+# object: the user's own ask/deny permission rules still apply (checked against agy 1.5.8).
+emit_none() {
+  case $fmt in
+    antigravity) [ "$mode" = pre ] && echo '{"decision":"allow"}' || echo '{}' ;;
+    cursor) echo '{}' ;;
+  esac
+}
+
+emit_deny() {
+  case $fmt in
+    cursor) jq -n --arg r "$1" '{permission:"deny",user_message:"ram-guard: RAM is critical, heavy command held back.",agent_message:$r}' ;;
+    gemini|antigravity) jq -n --arg r "$1" '{decision:"deny",reason:$r}' ;;
+    *) jq -n --arg r "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}' ;;
+  esac
+}
 
 case $mode in
   status) echo "RAM used $(used_pct)%, swap $(swap_gb) GB"; top_procs 8 ;;
   session)
     self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
     rules="RAM rules (ram-guard): Every process you start (dev servers, test runs, containers, browsers) is yours to stop. Note its PID and stop it when you are done. Never kill a process you did not start. Before starting something heavy, run \`\"$self\" status\`; if RAM is at or above ${WARN}%, close your own idle processes first."
-    jq -n --arg r "$rules" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$r}}'
+    emit_context session "$rules"
     ;;
   top) top_procs 10 ;;
 
   pre)
-    cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
-    is_heavy "$cmd" || exit 0
+    cmd=$(command_of)
+    is_heavy "$cmd" || { emit_none; exit 0; }
     used=$(used_pct)
     waited=0
     while critical "$used" && [ "$waited" -lt "$WAIT_SECS" ]; do
@@ -88,22 +127,24 @@ case $mode in
     if critical "$used"; then
       reason="RAM is at ${used}% used, swap $(swap_gb) GB (limits ${BLOCK}% used, or ${SWAP_BLOCK} GB swap above ${SWAP_FLOOR_PCT}%) after waiting ${waited}s, so this memory-heavy command was not started. Stop dev servers and test runs you started yourself (check your own PIDs), do not kill other agents' processes, then retry. Top processes:
 $(top_procs 6)"
-      jq -n --arg r "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+      emit_deny "$reason"
+    else
+      emit_none
     fi
     ;;
 
   post)
-    sid=$(jq -r '.session_id // "x"' <<<"$input")
+    sid=$(session_of | tr -cd 'A-Za-z0-9_-')
     stamp="${TMPDIR:-/tmp}/ram-guard-$sid"
     now=$(date +%s)
-    [ -f "$stamp" ] && [ $((now - $(stat -f %m "$stamp"))) -lt 300 ] && exit 0
+    [ -f "$stamp" ] && [ $((now - $(stat -f %m "$stamp"))) -lt 300 ] && { emit_none; exit 0; }
     touch "$stamp"
     used=$(used_pct)
     log_sample "$used"
-    [ "$used" -ge "$WARN" ] || swap_ge "$SWAP_WARN" || exit 0
+    [ "$used" -ge "$WARN" ] || swap_ge "$SWAP_WARN" || { emit_none; exit 0; }
     msg="RAM warning: ${used}% used, swap $(swap_gb) GB. Stop dev servers, test runs and containers YOU started that you no longer need, and do not start new heavy processes until it drops below ${WARN}%. Do not kill processes you did not start. Top processes:
 $(top_procs 6)"
-    jq -n --arg m "$msg" '{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$m}}'
+    emit_context post "$msg"
     ;;
 esac
 exit 0
