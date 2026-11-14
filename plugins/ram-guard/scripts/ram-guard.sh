@@ -82,17 +82,16 @@ emit_context() {
     gemini)
       local ev=AfterTool; [ "$1" = session ] && ev=SessionStart
       jq -n --arg e "$ev" --arg m "$2" '{hookSpecificOutput:{hookEventName:$e,additionalContext:$m}}' ;;
-    antigravity)
-      if [ "$1" = session ]; then jq -n --arg m "$2" '{injectSteps:[{systemMessage:{systemMessage:$m}}]}'
-      else jq -n --arg m "$2" '{injectSteps:[{ephemeralMessage:$m}]}'; fi ;;
+    antigravity) jq -n --arg m "$2" '{injectSteps:[{systemMessage:{systemMessage:$m}}]}' ;;
     *)
       local ev=PostToolUse; [ "$1" = session ] && ev=SessionStart
       jq -n --arg e "$ev" --arg m "$2" '{hookSpecificOutput:{hookEventName:$e,additionalContext:$m}}' ;;
   esac
 }
 
-# Nothing to say. Cursor and Antigravity expect a JSON object from every hook (Antigravity's PreToolUse
-# needs a decision; "allow" leaves the user's normal approval rules in charge); the others accept empty output.
+# Nothing to say. Cursor and Antigravity expect a JSON object from every hook; the others accept empty output.
+# Antigravity's PreToolUse treats a missing or empty decision as deny. "allow" only means this hook does not
+# object: the user's own ask/deny permission rules still apply (checked against agy 1.5.8).
 emit_none() {
   case $fmt in
     antigravity) [ "$mode" = pre ] && echo '{"decision":"allow"}' || echo '{}' ;;
@@ -135,7 +134,7 @@ $(top_procs 6)"
     ;;
 
   post)
-    sid=$(session_of | tr -c 'A-Za-z0-9_-' _)
+    sid=$(session_of | tr -cd 'A-Za-z0-9_-')
     stamp="${TMPDIR:-/tmp}/ram-guard-$sid"
     now=$(date +%s)
     [ -f "$stamp" ] && [ $((now - $(stat -f %m "$stamp"))) -lt 300 ] && { emit_none; exit 0; }

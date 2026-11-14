@@ -127,14 +127,14 @@ Cursor, in `~/.cursor/hooks.json`:
 }
 ```
 
-Antigravity, in `~/.gemini/config/hooks.json` (its `PostToolUse` hooks cannot talk to the agent, so the warning runs on `PreInvocation`, throttled the same way):
+Antigravity, in `~/.gemini/config/hooks.json` (its `PostToolUse` hooks cannot talk to the agent, so the warning runs on `PreInvocation`, throttled the same way). `SessionStart` and `PreInvocation` take a flat list of handlers, not `matcher`/`hooks` groups. Antigravity blocks the tool call when a `PreToolUse` hook fails, so make sure `jq` is installed:
 
 ```json
 {
   "ram-guard": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "/Users/<you>/.local/bin/ram-guard.sh session antigravity", "timeout": 10 }] }],
-    "PreToolUse": [{ "matcher": "run_command", "hooks": [{ "type": "command", "command": "/Users/<you>/.local/bin/ram-guard.sh pre antigravity", "timeout": 150 }] }],
-    "PreInvocation": [{ "hooks": [{ "type": "command", "command": "/Users/<you>/.local/bin/ram-guard.sh post antigravity", "timeout": 10 }] }]
+    "SessionStart": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh session antigravity", "timeout": 10 }],
+    "PreToolUse": [{ "matcher": "run_command", "hooks": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh pre antigravity", "timeout": 150 }] }],
+    "PreInvocation": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh post antigravity", "timeout": 10 }]
   }
 }
 ```

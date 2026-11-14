@@ -97,9 +97,9 @@ if [ -d "$HOME/.gemini/antigravity" ] || [ -d "$HOME/.gemini/antigravity-cli" ] 
     # PostToolUse cannot add context in Antigravity, so the throttled warning runs on PreInvocation.
     jq --arg cmd "$DEST" '
       .["ram-guard"] = {
-        SessionStart: [{hooks: [{type: "command", command: ($cmd + " session antigravity"), timeout: 10}]}],
+        SessionStart: [{type: "command", command: ($cmd + " session antigravity"), timeout: 10}],
         PreToolUse: [{matcher: "run_command", hooks: [{type: "command", command: ($cmd + " pre antigravity"), timeout: 150}]}],
-        PreInvocation: [{hooks: [{type: "command", command: ($cmd + " post antigravity"), timeout: 10}]}]
+        PreInvocation: [{type: "command", command: ($cmd + " post antigravity"), timeout: 10}]
       }
     ' "$hooks.bak-ram-guard" >"$hooks"
     echo "Antigravity: hooks added to $hooks (backup at $hooks.bak-ram-guard)"
