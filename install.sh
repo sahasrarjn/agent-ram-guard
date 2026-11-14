@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs ram-guard.sh to ~/.local/bin and registers it as a Bash hook in Claude Code and/or Codex.
+# Installs ram-guard.sh to ~/.local/bin and registers it as a shell hook in Claude Code, Codex, Cursor and/or Antigravity.
 # Safe to re-run: a tool that already references ram-guard.sh is left alone.
 set -euo pipefail
 
@@ -67,5 +67,44 @@ EOF
   fi
 fi
 
-[ "$installed_any" = 1 ] || echo "Found neither ~/.claude nor ~/.codex; the script is installed but no hooks were registered."
+if [ -d "$HOME/.cursor" ]; then
+  installed_any=1
+  hooks="$HOME/.cursor/hooks.json"
+  [ -f "$hooks" ] || echo '{"version":1,"hooks":{}}' >"$hooks"
+  if grep -q 'ram-guard.sh' "$hooks"; then
+    echo "Cursor: already configured in $hooks"
+  else
+    cp "$hooks" "$hooks.bak-ram-guard"
+    jq --arg cmd "$DEST" '
+      .version = (.version // 1)
+      | .hooks.sessionStart = ((.hooks.sessionStart // []) + [{command: ($cmd + " session cursor"), timeout: 10}])
+      | .hooks.beforeShellExecution = ((.hooks.beforeShellExecution // []) + [{command: ($cmd + " pre cursor"), timeout: 150}])
+      | .hooks.postToolUse = ((.hooks.postToolUse // []) + [{matcher: "Shell", command: ($cmd + " post cursor"), timeout: 10}])
+    ' "$hooks.bak-ram-guard" >"$hooks"
+    echo "Cursor: hooks added to $hooks (backup at $hooks.bak-ram-guard)"
+  fi
+fi
+
+if [ -d "$HOME/.gemini/antigravity" ] || [ -d "$HOME/.gemini/antigravity-cli" ] || command -v agy >/dev/null; then
+  installed_any=1
+  hooks="$HOME/.gemini/config/hooks.json"
+  mkdir -p "$(dirname "$hooks")"
+  [ -f "$hooks" ] || echo '{}' >"$hooks"
+  if grep -q 'ram-guard.sh' "$hooks"; then
+    echo "Antigravity: already configured in $hooks"
+  else
+    cp "$hooks" "$hooks.bak-ram-guard"
+    # PostToolUse cannot add context in Antigravity, so the throttled warning runs on PreInvocation.
+    jq --arg cmd "$DEST" '
+      .["ram-guard"] = {
+        SessionStart: [{hooks: [{type: "command", command: ($cmd + " session antigravity"), timeout: 10}]}],
+        PreToolUse: [{matcher: "run_command", hooks: [{type: "command", command: ($cmd + " pre antigravity"), timeout: 150}]}],
+        PreInvocation: [{hooks: [{type: "command", command: ($cmd + " post antigravity"), timeout: 10}]}]
+      }
+    ' "$hooks.bak-ram-guard" >"$hooks"
+    echo "Antigravity: hooks added to $hooks (backup at $hooks.bak-ram-guard)"
+  fi
+fi
+
+[ "$installed_any" = 1 ] || echo "Found none of ~/.claude, ~/.codex, ~/.cursor or Antigravity; the script is installed but no hooks were registered."
 "$DEST" status | head -1

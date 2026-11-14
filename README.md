@@ -1,13 +1,22 @@
 # agent-ram-guard
 
-A hook for [Claude Code](https://docs.claude.com/en/docs/claude-code) and [Codex](https://github.com/openai/codex) that keeps parallel coding agents from running a Mac out of memory.
+A hook for coding agents ([Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Cursor](https://cursor.com), [Antigravity](https://antigravity.google), [Gemini CLI](https://geminicli.com) and [pi](https://pi.dev)) that keeps parallel agents from running a Mac out of memory.
 
 When several agents share one machine, each one starts its own dev server, test run or container, and nobody stops them. RAM fills up, swap grows, and everything slows down. This hook makes the agents notice:
 
 - **Before** a memory-heavy shell command (`pytest`, `next dev`, `docker compose up`, `tsc`, `uvicorn`, ...), it checks RAM. If memory is critical it waits up to 2 minutes for it to drop, then denies the command and tells the agent to stop the processes it started itself.
 - **After** any shell command (at most once every 5 minutes per session), it logs a sample and, if RAM or swap is high, warns the agent with the top processes by memory, tagged with the git worktree they belong to.
 
-Claude Code and Codex use the same hook format and plugin layout, so one plugin serves both. macOS only (it reads `vm_stat`, `sysctl` and `ps`). Needs `jq`.
+One shell script does the work for every tool; each tool gets a thin hook config that tells the script which output format to speak. macOS only (it reads `vm_stat`, `sysctl` and `ps`). Needs `jq`.
+
+| Tool | Install | Blocks heavy commands | Warns after commands | RAM rules at session start |
+| --- | --- | --- | --- | --- |
+| Claude Code | plugin | yes | yes | yes |
+| Codex | plugin | yes | yes | yes |
+| pi | `pi install` | yes | yes (appended to the bash result) | yes (system prompt) |
+| Gemini CLI | extension | yes | yes | yes |
+| Cursor | `install.sh` | yes (`beforeShellExecution`) | yes (`postToolUse`) | yes |
+| Antigravity (app, IDE, CLI) | `install.sh` | yes (`run_command`) | yes, before the next model call | yes |
 
 ## Install as a plugin
 
@@ -26,6 +35,20 @@ Codex:
 codex plugin marketplace add sahasrarjn/agent-ram-guard
 codex plugin add ram-guard@agent-ram-guard
 ```
+
+pi:
+
+```bash
+pi install git:github.com/sahasrarjn/agent-ram-guard
+```
+
+Gemini CLI:
+
+```bash
+gemini extensions install https://github.com/sahasrarjn/agent-ram-guard
+```
+
+Cursor and Antigravity have no plugin install from a repo yet, so use the installer below. It finds them on its own.
 
 Then:
 
@@ -51,7 +74,9 @@ The RAM rules each session gets:
 curl -fsSL https://raw.githubusercontent.com/sahasrarjn/agent-ram-guard/main/install.sh | bash
 ```
 
-It registers the hooks for each tool it finds (`~/.claude`, `~/.codex`). It backs up each file it changes (`*.bak-ram-guard`) and leaves a tool alone if it already references `ram-guard.sh`, so re-running is safe. It does not add the RAM rules: copy them into `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` under a `# RAM` heading, with the path `~/.local/bin/ram-guard.sh`.
+It registers the hooks for each tool it finds: Claude Code (`~/.claude/settings.json`), Codex (`~/.codex/config.toml`), Cursor (`~/.cursor/hooks.json`) and Antigravity (`~/.gemini/config/hooks.json`, shared by the app, IDE and CLI). It backs up each file it changes (`*.bak-ram-guard`) and leaves a tool alone if it already references `ram-guard.sh`, so re-running is safe. Cursor and Antigravity get the RAM rules from a session-start hook. For Claude Code and Codex the installer does not add them: copy them into `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` under a `# RAM` heading, with the path `~/.local/bin/ram-guard.sh`.
+
+If Cursor is set to load third-party (Claude Code) hooks, it would also run the Claude Code entries; in that case keep only one of them.
 
 ### Manual setup
 
@@ -89,7 +114,34 @@ command = "/Users/<you>/.local/bin/ram-guard.sh post"
 timeout = 10
 ```
 
-In both tools, keep the `pre` timeout above `RAM_WAIT_SECS` so the hook can finish waiting.
+Cursor, in `~/.cursor/hooks.json`:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "~/.local/bin/ram-guard.sh session cursor", "timeout": 10 }],
+    "beforeShellExecution": [{ "command": "~/.local/bin/ram-guard.sh pre cursor", "timeout": 150 }],
+    "postToolUse": [{ "matcher": "Shell", "command": "~/.local/bin/ram-guard.sh post cursor", "timeout": 10 }]
+  }
+}
+```
+
+Antigravity, in `~/.gemini/config/hooks.json` (its `PostToolUse` hooks cannot talk to the agent, so the warning runs on `PreInvocation`, throttled the same way):
+
+```json
+{
+  "ram-guard": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "/Users/<you>/.local/bin/ram-guard.sh session antigravity", "timeout": 10 }] }],
+    "PreToolUse": [{ "matcher": "run_command", "hooks": [{ "type": "command", "command": "/Users/<you>/.local/bin/ram-guard.sh pre antigravity", "timeout": 150 }] }],
+    "PreInvocation": [{ "hooks": [{ "type": "command", "command": "/Users/<you>/.local/bin/ram-guard.sh post antigravity", "timeout": 10 }] }]
+  }
+}
+```
+
+Any other tool with command hooks: call `ram-guard.sh pre|post|session <format>`, where format is `claude` (default, also Codex), `cursor`, `gemini` or `antigravity`. The script reads the command from `tool_input.command`, `command` or `toolCall.args.CommandLine`.
+
+In every tool, keep the `pre` timeout above `RAM_WAIT_SECS` so the hook can finish waiting.
 
 ## Manual use
 
@@ -124,9 +176,9 @@ Which commands count as heavy is the `HEAVY` regex near the top of `plugins/ram-
 
 ## Uninstall
 
-Plugin: `claude plugin uninstall ram-guard@agent-ram-guard`, `codex plugin remove ram-guard@agent-ram-guard`.
+Plugin: `claude plugin uninstall ram-guard@agent-ram-guard`, `codex plugin remove ram-guard@agent-ram-guard`, `pi remove git:github.com/sahasrarjn/agent-ram-guard`, `gemini extensions uninstall agent-ram-guard`.
 
-`install.sh` or manual setup: remove the `ram-guard.sh` entries from `~/.claude/settings.json` and `~/.codex/config.toml`, delete the `# RAM` section from `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, then `rm ~/.local/bin/ram-guard.sh`.
+`install.sh` or manual setup: remove the `ram-guard.sh` entries from `~/.claude/settings.json`, `~/.codex/config.toml` and `~/.cursor/hooks.json`, the `ram-guard` key from `~/.gemini/config/hooks.json`, delete the `# RAM` section from `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, then `rm ~/.local/bin/ram-guard.sh`.
 
 ## License
 
