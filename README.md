@@ -1,64 +1,82 @@
 # agent-ram-guard
 
-A hook for coding agents ([Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Cursor](https://cursor.com), [Antigravity](https://antigravity.google), [Gemini CLI](https://geminicli.com) and [pi](https://pi.dev)) that keeps parallel agents from running a Mac out of memory.
+Keeps parallel coding agents from running a Mac out of memory. Works with [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Cursor](https://cursor.com), [Antigravity](https://antigravity.google), [pi](https://pi.dev) and [Gemini CLI](https://geminicli.com).
 
-When several agents share one machine, each one starts its own dev server, test run or container, and nobody stops them. RAM fills up, swap grows, and everything slows down. This hook makes the agents notice:
+When several agents share one machine, each one starts its own dev server, test run or container, and nobody stops them. RAM fills up, swap grows, and everything slows down. ram-guard hooks into each agent's shell commands so the agents notice:
 
-- **Before** a memory-heavy shell command (`pytest`, `next dev`, `docker compose up`, `tsc`, `uvicorn`, ...), it checks RAM. If memory is critical it waits up to 2 minutes for it to drop, then denies the command and tells the agent to stop the processes it started itself.
-- **After** any shell command (at most once every 5 minutes per session), it logs a sample and, if RAM or swap is high, warns the agent with the top processes by memory, tagged with the git worktree they belong to.
+- **Session start:** the agent gets three RAM rules. It must stop every process it starts, never kill a process it did not start, and check RAM before starting anything heavy.
+- **Before** a memory-heavy shell command (`pytest`, `next dev`, `docker compose up`, `tsc`, `uvicorn`, ...): if RAM is critical (95% used by default), it waits up to 2 minutes for it to drop, then denies the command. The denial tells the agent to stop the processes it started itself.
+- **After** a shell command (at most once every 5 minutes per session): it logs a sample and, if RAM is at or above 90% or swap is high, warns the agent with the top processes by memory, tagged with the git worktree each belongs to.
 
-One shell script does the work for every tool; each tool gets a thin hook config that tells the script which output format to speak. macOS only (it reads `vm_stat`, `sysctl` and `ps`). Needs `jq`.
+One shell script does the work for every tool. Each tool gets a small hook config that tells the script which output format to use. Requires macOS (it reads `vm_stat`, `sysctl` and `ps`) and `jq` (`brew install jq`).
 
-| Tool | Install | Blocks heavy commands | Warns after commands | RAM rules at session start |
+## Install
+
+| Tool | Install with | Blocks heavy commands | Warns | RAM rules |
 | --- | --- | --- | --- | --- |
-| Claude Code | plugin | yes | yes | yes |
-| Codex | plugin | yes | yes | yes |
-| pi | `pi install` | yes | yes (appended to the bash result) | yes (system prompt) |
-| Gemini CLI | extension | yes | yes | yes |
-| Cursor | `install.sh` | yes (`beforeShellExecution`) | yes (`postToolUse`) | yes |
-| Antigravity (app, IDE, CLI) | `install.sh` | yes (`run_command`) | yes, before the next model call | yes |
+| Claude Code | plugin | yes | after the command | session start |
+| Codex | plugin | yes | after the command | session start |
+| Cursor | `install.sh` | yes | after the command | session start |
+| Antigravity (app, IDE, CLI) | `install.sh` | yes | before the next model call | session start |
+| pi | `pi install` | yes | appended to the bash result | system prompt |
+| Gemini CLI | extension | yes | after the command | session start |
 
-## Install as a plugin
-
-One plugin works in both tools. It registers the hooks and, at the start of each session, gives the agent the RAM rules below, so there is nothing to add to `CLAUDE.md` or `AGENTS.md`.
-
-Claude Code:
+### Claude Code and Codex: plugin
 
 ```bash
 claude plugin marketplace add sahasrarjn/agent-ram-guard
 claude plugin install ram-guard@agent-ram-guard
-```
 
-Codex:
-
-```bash
 codex plugin marketplace add sahasrarjn/agent-ram-guard
 codex plugin add ram-guard@agent-ram-guard
 ```
 
-pi:
+- Restart open sessions; new ones pick the plugin up.
+- **Codex skips plugin hooks until you trust them.** Start `codex` and pick "Trust all and continue" when it says the hooks need review (or run `/hooks`). Nobody can do this step for you.
+- Update later with `claude plugin marketplace update agent-ram-guard` or `codex plugin marketplace upgrade agent-ram-guard`. Codex asks you to trust the hooks again when they change.
+
+### Cursor and Antigravity: installer
+
+Neither can install hooks from a repo yet, so the installer writes them into your global config:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sahasrarjn/agent-ram-guard/main/install.sh | bash -s -- cursor antigravity
+```
+
+Name the tools you want, or leave the list empty (`| bash`) to set up every tool it finds (Claude Code, Codex, Cursor, Antigravity). If you already use the Claude Code or Codex plugin, name only `cursor antigravity`, or every command is checked twice.
+
+The installer copies the script to `~/.local/bin/ram-guard.sh` and registers the hooks in:
+
+| Tool | File |
+| --- | --- |
+| Claude Code | `~/.claude/settings.json` |
+| Codex | `~/.codex/config.toml` (then trust them with `/hooks`) |
+| Cursor | `~/.cursor/hooks.json` (restart Cursor) |
+| Antigravity | `~/.gemini/config/hooks.json`, shared by the app, IDE and CLI |
+
+It backs up each file it changes (`*.bak-ram-guard`) and skips a tool that already references `ram-guard.sh`, so you can re-run it safely. Re-run it to update the script.
+
+If Cursor is set to load third-party (Claude Code) hooks, it also runs your Claude Code entries, so keep only one of the two.
+
+### pi
 
 ```bash
 pi install git:github.com/sahasrarjn/agent-ram-guard
 ```
 
-Gemini CLI:
+The extension runs the same script: it blocks heavy `bash` calls, appends the warning to the bash result and adds the RAM rules to the system prompt.
+
+### Gemini CLI
 
 ```bash
 gemini extensions install https://github.com/sahasrarjn/agent-ram-guard
 ```
 
-Cursor and Antigravity have no plugin install from a repo yet, so use the installer below. It finds them on its own.
+Google moved free-tier Gemini CLI users to Antigravity in June 2026; this is for accounts that still run it.
 
-Then:
+### The RAM rules
 
-- Restart open Claude Code sessions; new ones pick the plugin up.
-- **Codex skips plugin hooks until you trust them.** Start `codex`, and pick "Trust all and continue" when it says the hooks need review (or run `/hooks`). Nobody can do this step for you.
-- If you set ram-guard up earlier with `install.sh` or by hand, remove those hook entries (see Uninstall), or every command is checked twice.
-
-To update later: `claude plugin marketplace update agent-ram-guard`, or `codex plugin marketplace upgrade agent-ram-guard`. Codex asks you to trust the hooks again when they change.
-
-The RAM rules each session gets:
+Every install method gives the agent these rules at the start of a session (with the real script path), so there is nothing to add to `CLAUDE.md`, `AGENTS.md` or `GEMINI.md`:
 
 ```markdown
 - Every process you start (dev servers, test runs, containers, browsers) is yours to stop. Note its PID and stop it when you are done.
@@ -66,25 +84,19 @@ The RAM rules each session gets:
 - Before starting something heavy, run `ram-guard.sh status`. If RAM is at or above 90%, close your own idle processes first.
 ```
 
-## Install without the plugin
+## Manual setup
 
-`install.sh` copies the script to `~/.local/bin/` and adds the hooks to your global config instead. Use it if you would rather not use plugins.
+What the installer writes, if you would rather edit the files yourself.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/sahasrarjn/agent-ram-guard/main/install.sh | bash
-```
-
-It registers the hooks for each tool it finds: Claude Code (`~/.claude/settings.json`), Codex (`~/.codex/config.toml`), Cursor (`~/.cursor/hooks.json`) and Antigravity (`~/.gemini/config/hooks.json`, shared by the app, IDE and CLI). It backs up each file it changes (`*.bak-ram-guard`) and leaves a tool alone if it already references `ram-guard.sh`, so re-running is safe. Cursor and Antigravity get the RAM rules from a session-start hook. For Claude Code and Codex the installer does not add them: copy them into `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` under a `# RAM` heading, with the path `~/.local/bin/ram-guard.sh`.
-
-If Cursor is set to load third-party (Claude Code) hooks, it would also run the Claude Code entries; in that case keep only one of them.
-
-### Manual setup
 
 Claude Code, in `~/.claude/settings.json` (merge into any existing `hooks` block):
 
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh session", "timeout": 10 }] }
+    ],
     "PreToolUse": [
       { "matcher": "Bash", "hooks": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh pre", "timeout": 150, "statusMessage": "Checking RAM..." }] }
     ],
@@ -98,6 +110,12 @@ Claude Code, in `~/.claude/settings.json` (merge into any existing `hooks` block
 Codex, in `~/.codex/config.toml`, with the absolute path to the script, then trust them with `/hooks`:
 
 ```toml
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/Users/<you>/.local/bin/ram-guard.sh session"
+timeout = 10
+
 [[hooks.PreToolUse]]
 matcher = "Bash"
 [[hooks.PreToolUse.hooks]]
@@ -160,7 +178,7 @@ Samples (timestamp, used %, swap GB) are appended to `~/.local/state/ram-guard/r
 
 ## Configuration
 
-Set these as environment variables (for Claude Code, the `env` block of `settings.json` works):
+Set these as environment variables in the environment your agent runs in (for Claude Code, the `env` block of `settings.json` works):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -178,7 +196,7 @@ Which commands count as heavy is the `HEAVY` regex near the top of `plugins/ram-
 
 Plugin: `claude plugin uninstall ram-guard@agent-ram-guard`, `codex plugin remove ram-guard@agent-ram-guard`, `pi remove git:github.com/sahasrarjn/agent-ram-guard`, `gemini extensions uninstall agent-ram-guard`.
 
-`install.sh` or manual setup: remove the `ram-guard.sh` entries from `~/.claude/settings.json`, `~/.codex/config.toml` and `~/.cursor/hooks.json`, the `ram-guard` key from `~/.gemini/config/hooks.json`, delete the `# RAM` section from `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, then `rm ~/.local/bin/ram-guard.sh`.
+`install.sh` or manual setup: remove the `ram-guard.sh` entries from `~/.claude/settings.json`, `~/.codex/config.toml` and `~/.cursor/hooks.json`, and the `ram-guard` key from `~/.gemini/config/hooks.json`, then `rm ~/.local/bin/ram-guard.sh`. Older versions of these instructions had you paste the RAM rules into `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`; delete that `# RAM` section too.
 
 ## License
 

@@ -1,7 +1,16 @@
 #!/bin/bash
 # Installs ram-guard.sh to ~/.local/bin and registers it as a shell hook in Claude Code, Codex, Cursor and/or Antigravity.
 # Safe to re-run: a tool that already references ram-guard.sh is left alone.
+#   install.sh                       every tool it finds
+#   install.sh cursor antigravity    only these (claude, codex, cursor, antigravity)
 set -euo pipefail
+
+for t in "$@"; do
+  case $t in claude|codex|cursor|antigravity) ;; *) echo "Unknown tool: $t (use claude, codex, cursor, antigravity)" >&2; exit 1 ;; esac
+done
+# A tool is set up when it was named, or when nothing was named and it is installed.
+want() { [ ${#TOOLS[@]} -eq 0 ] || [[ " ${TOOLS[*]} " == *" $1 "* ]]; }
+TOOLS=("$@")
 
 SRC_URL=https://raw.githubusercontent.com/sahasrarjn/agent-ram-guard/main/plugins/ram-guard/scripts/ram-guard.sh
 DEST="$HOME/.local/bin/ram-guard.sh"
@@ -21,7 +30,7 @@ echo "Installed $DEST"
 
 installed_any=0
 
-if [ -d "$HOME/.claude" ]; then
+if want claude && [ -d "$HOME/.claude" ]; then
   installed_any=1
   settings="$HOME/.claude/settings.json"
   [ -f "$settings" ] || echo '{}' >"$settings"
@@ -30,14 +39,15 @@ if [ -d "$HOME/.claude" ]; then
   else
     cp "$settings" "$settings.bak-ram-guard"
     jq --arg cmd "$DEST" '
-      .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: ($cmd + " pre"), timeout: 150, statusMessage: "Checking RAM..."}]}])
+      .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [{type: "command", command: ($cmd + " session"), timeout: 10}]}])
+      | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: ($cmd + " pre"), timeout: 150, statusMessage: "Checking RAM..."}]}])
       | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: ($cmd + " post"), timeout: 10}]}])
     ' "$settings.bak-ram-guard" >"$settings"
     echo "Claude Code: hooks added to $settings (backup at $settings.bak-ram-guard)"
   fi
 fi
 
-if [ -d "$HOME/.codex" ]; then
+if want codex && [ -d "$HOME/.codex" ]; then
   installed_any=1
   config="$HOME/.codex/config.toml"
   touch "$config"
@@ -46,6 +56,12 @@ if [ -d "$HOME/.codex" ]; then
   else
     cp "$config" "$config.bak-ram-guard"
     cat >>"$config" <<EOF
+
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "$DEST session"
+timeout = 10
 
 [[hooks.PreToolUse]]
 matcher = "Bash"
@@ -67,7 +83,7 @@ EOF
   fi
 fi
 
-if [ -d "$HOME/.cursor" ]; then
+if want cursor && [ -d "$HOME/.cursor" ]; then
   installed_any=1
   hooks="$HOME/.cursor/hooks.json"
   [ -f "$hooks" ] || echo '{"version":1,"hooks":{}}' >"$hooks"
@@ -85,7 +101,7 @@ if [ -d "$HOME/.cursor" ]; then
   fi
 fi
 
-if [ -d "$HOME/.gemini/antigravity" ] || [ -d "$HOME/.gemini/antigravity-cli" ] || command -v agy >/dev/null; then
+if want antigravity && { [ -d "$HOME/.gemini/antigravity" ] || [ -d "$HOME/.gemini/antigravity-cli" ] || command -v agy >/dev/null; }; then
   installed_any=1
   hooks="$HOME/.gemini/config/hooks.json"
   mkdir -p "$(dirname "$hooks")"
@@ -106,5 +122,5 @@ if [ -d "$HOME/.gemini/antigravity" ] || [ -d "$HOME/.gemini/antigravity-cli" ] 
   fi
 fi
 
-[ "$installed_any" = 1 ] || echo "Found none of ~/.claude, ~/.codex, ~/.cursor or Antigravity; the script is installed but no hooks were registered."
+[ "$installed_any" = 1 ] || echo "Found none of the requested tools (${TOOLS[*]:-claude codex cursor antigravity}); the script is installed but no hooks were registered."
 "$DEST" status | head -1
