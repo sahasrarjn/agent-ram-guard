@@ -1,0 +1,5 @@
+{
+  "name": "agent-ram-guard",
+  "version": "1.1.0",
+  "description": "Holds memory-heavy shell commands while RAM is critical and warns the agent to stop its own dev servers and test runs. macOS, needs jq."
+}
