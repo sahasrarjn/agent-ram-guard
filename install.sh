@@ -1,126 +1,98 @@
 #!/bin/bash
-# Installs ram-guard.sh to ~/.local/bin and registers it as a shell hook in Claude Code, Codex, Cursor and/or Antigravity.
-# Safe to re-run: a tool that already references ram-guard.sh is left alone.
-#   install.sh                       every tool it finds
+# Installs ram-guard.sh to ~/.local/bin and registers its hooks in each coding agent's global config.
+#   install.sh                       every supported tool it finds
 #   install.sh cursor antigravity    only these (claude, codex, cursor, antigravity)
+# Safe to re-run: the script is refreshed, and a config that already references ram-guard.sh is left alone.
+# The hook configs come from `ram-guard.sh config <tool>`, the same source the plugin files are built from.
 set -euo pipefail
 
-for t in "$@"; do
-  case $t in claude|codex|cursor|antigravity) ;; *) echo "Unknown tool: $t (use claude, codex, cursor, antigravity)" >&2; exit 1 ;; esac
-done
-# A tool is set up when it was named, or when nothing was named and it is installed.
-want() { [ ${#TOOLS[@]} -eq 0 ] || [[ " ${TOOLS[*]} " == *" $1 "* ]]; }
-TOOLS=("$@")
+readonly SRC_URL=https://raw.githubusercontent.com/sahasrarjn/agent-ram-guard/main/plugins/ram-guard/scripts/ram-guard.sh
+readonly DEST="$HOME/.local/bin/ram-guard.sh"
+readonly ALL_TOOLS=(claude codex cursor antigravity)
 
-SRC_URL=https://raw.githubusercontent.com/sahasrarjn/agent-ram-guard/main/plugins/ram-guard/scripts/ram-guard.sh
-DEST="$HOME/.local/bin/ram-guard.sh"
+config_file() {
+  case $1 in
+    claude) echo "$HOME/.claude/settings.json" ;;
+    codex) echo "$HOME/.codex/config.toml" ;;
+    cursor) echo "$HOME/.cursor/hooks.json" ;;
+    antigravity) echo "$HOME/.gemini/config/hooks.json" ;;
+  esac
+}
 
-[ "$(uname)" = Darwin ] || { echo "ram-guard supports macOS only." >&2; exit 1; }
-command -v jq >/dev/null || { echo "ram-guard needs jq (brew install jq)." >&2; exit 1; }
+is_installed() {
+  case $1 in
+    antigravity) [ -d "$HOME/.gemini/antigravity" ] || [ -d "$HOME/.gemini/antigravity-cli" ] || command -v agy >/dev/null ;;
+    *) [ -d "$HOME/.$1" ] ;;
+  esac
+}
 
-mkdir -p "$(dirname "$DEST")"
-here=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)
-if [ -n "$here" ] && [ -f "$here/plugins/ram-guard/scripts/ram-guard.sh" ]; then
-  cp "$here/plugins/ram-guard/scripts/ram-guard.sh" "$DEST"
-else
-  curl -fsSL "$SRC_URL" -o "$DEST"
-fi
-chmod +x "$DEST"
-echo "Installed $DEST"
+after_note() {
+  case $1 in
+    codex) echo "  Open codex and run /hooks to trust the new hooks; untrusted hooks are skipped." ;;
+    cursor | claude) echo "  Restart open sessions to pick the hooks up." ;;
+  esac
+}
 
-installed_any=0
-
-if want claude && [ -d "$HOME/.claude" ]; then
-  installed_any=1
-  settings="$HOME/.claude/settings.json"
-  [ -f "$settings" ] || echo '{}' >"$settings"
-  if grep -q 'ram-guard.sh' "$settings"; then
-    echo "Claude Code: already configured in $settings"
+install_script() {
+  local here
+  mkdir -p "$(dirname "$DEST")"
+  here=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)
+  if [ -n "$here" ] && [ -f "$here/plugins/ram-guard/scripts/ram-guard.sh" ]; then
+    cp "$here/plugins/ram-guard/scripts/ram-guard.sh" "$DEST"
   else
-    cp "$settings" "$settings.bak-ram-guard"
-    jq --arg cmd "$DEST" '
-      .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [{type: "command", command: ($cmd + " session"), timeout: 10}]}])
-      | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: ($cmd + " pre"), timeout: 150, statusMessage: "Checking RAM..."}]}])
-      | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: ($cmd + " post"), timeout: 10}]}])
-    ' "$settings.bak-ram-guard" >"$settings"
-    echo "Claude Code: hooks added to $settings (backup at $settings.bak-ram-guard)"
+    curl -fsSL "$SRC_URL" -o "$DEST"
   fi
-fi
+  chmod +x "$DEST"
+  echo "Installed $DEST"
+}
 
-if want codex && [ -d "$HOME/.codex" ]; then
-  installed_any=1
-  config="$HOME/.codex/config.toml"
-  touch "$config"
-  if grep -q 'ram-guard.sh' "$config"; then
-    echo "Codex: already configured in $config"
-  else
-    cp "$config" "$config.bak-ram-guard"
-    cat >>"$config" <<EOF
+# Deep-merges the tool's hooks into its JSON config, appending to existing hook lists.
+merge_json() {
+  local file=$1 tool=$2
+  jq --argjson new "$("$DEST" config "$tool" "$DEST")" '
+    def merge($a; $b):
+      if ($a | type) == "object" and ($b | type) == "object" then
+        reduce ($b | keys_unsorted[]) as $k ($a; .[$k] = merge($a[$k]; $b[$k]))
+      elif ($a | type) == "array" and ($b | type) == "array" then $a + $b
+      elif $a == null then $b
+      else $a end;
+    merge(.; $new)' "$file.bak-ram-guard" >"$file"
+}
 
-[[hooks.SessionStart]]
-[[hooks.SessionStart.hooks]]
-type = "command"
-command = "$DEST session"
-timeout = 10
-
-[[hooks.PreToolUse]]
-matcher = "Bash"
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "$DEST pre"
-timeout = 150
-statusMessage = "Checking RAM..."
-
-[[hooks.PostToolUse]]
-matcher = "Bash"
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = "$DEST post"
-timeout = 10
-EOF
-    echo "Codex: hooks added to $config (backup at $config.bak-ram-guard)"
-    echo "Codex: open codex and run /hooks to review and trust the new hooks; untrusted hooks are skipped."
+register() {
+  local tool=$1 file
+  file=$(config_file "$tool")
+  mkdir -p "$(dirname "$file")"
+  if [ ! -f "$file" ]; then
+    if [ "$tool" = codex ]; then touch "$file"; else echo '{}' >"$file"; fi
   fi
-fi
-
-if want cursor && [ -d "$HOME/.cursor" ]; then
-  installed_any=1
-  hooks="$HOME/.cursor/hooks.json"
-  [ -f "$hooks" ] || echo '{"version":1,"hooks":{}}' >"$hooks"
-  if grep -q 'ram-guard.sh' "$hooks"; then
-    echo "Cursor: already configured in $hooks"
-  else
-    cp "$hooks" "$hooks.bak-ram-guard"
-    jq --arg cmd "$DEST" '
-      .version = (.version // 1)
-      | .hooks.sessionStart = ((.hooks.sessionStart // []) + [{command: ($cmd + " session cursor"), timeout: 10}])
-      | .hooks.beforeShellExecution = ((.hooks.beforeShellExecution // []) + [{command: ($cmd + " pre cursor"), timeout: 150}])
-      | .hooks.postToolUse = ((.hooks.postToolUse // []) + [{matcher: "Shell", command: ($cmd + " post cursor"), timeout: 10}])
-    ' "$hooks.bak-ram-guard" >"$hooks"
-    echo "Cursor: hooks added to $hooks (backup at $hooks.bak-ram-guard)"
+  if grep -q 'ram-guard.sh' "$file"; then
+    echo "$tool: already configured in $file"
+    return
   fi
-fi
+  cp "$file" "$file.bak-ram-guard"
+  if [ "$tool" = codex ]; then "$DEST" config codex "$DEST" >>"$file"; else merge_json "$file" "$tool"; fi
+  echo "$tool: hooks added to $file (backup at $file.bak-ram-guard)"
+  after_note "$tool"
+}
 
-if want antigravity && { [ -d "$HOME/.gemini/antigravity" ] || [ -d "$HOME/.gemini/antigravity-cli" ] || command -v agy >/dev/null; }; then
-  installed_any=1
-  hooks="$HOME/.gemini/config/hooks.json"
-  mkdir -p "$(dirname "$hooks")"
-  [ -f "$hooks" ] || echo '{}' >"$hooks"
-  if grep -q 'ram-guard.sh' "$hooks"; then
-    echo "Antigravity: already configured in $hooks"
-  else
-    cp "$hooks" "$hooks.bak-ram-guard"
-    # PostToolUse cannot add context in Antigravity, so the throttled warning runs on PreInvocation.
-    jq --arg cmd "$DEST" '
-      .["ram-guard"] = {
-        SessionStart: [{type: "command", command: ($cmd + " session antigravity"), timeout: 10}],
-        PreToolUse: [{matcher: "run_command", hooks: [{type: "command", command: ($cmd + " pre antigravity"), timeout: 150}]}],
-        PreInvocation: [{type: "command", command: ($cmd + " post antigravity"), timeout: 10}]
-      }
-    ' "$hooks.bak-ram-guard" >"$hooks"
-    echo "Antigravity: hooks added to $hooks (backup at $hooks.bak-ram-guard)"
-  fi
-fi
+main() {
+  local tools=("$@") tool registered=0
+  [ ${#tools[@]} -gt 0 ] || tools=("${ALL_TOOLS[@]}")
+  for tool in "${tools[@]}"; do
+    [[ " ${ALL_TOOLS[*]} " == *" $tool "* ]] || { echo "Unknown tool: $tool (use ${ALL_TOOLS[*]})" >&2; exit 1; }
+  done
+  [ "$(uname)" = Darwin ] || { echo "ram-guard supports macOS only." >&2; exit 1; }
+  command -v jq >/dev/null || { echo "ram-guard needs jq (brew install jq)." >&2; exit 1; }
 
-[ "$installed_any" = 1 ] || echo "Found none of the requested tools (${TOOLS[*]:-claude codex cursor antigravity}); the script is installed but no hooks were registered."
-"$DEST" status | head -1
+  install_script
+  for tool in "${tools[@]}"; do
+    is_installed "$tool" || continue
+    register "$tool"
+    registered=1
+  done
+  [ "$registered" = 1 ] || echo "Found none of: ${tools[*]}. The script is installed but no hooks were registered."
+  "$DEST" status | head -1
+}
+
+main "$@"

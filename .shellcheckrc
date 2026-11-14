@@ -1,0 +1,2 @@
+# Single-quoted jq programs and tool-side ${...} placeholders are intentional throughout this repo.
+disable=SC2016

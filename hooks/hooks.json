@@ -1,13 +1,42 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "name": "ram-guard-session", "command": "\"${extensionPath}/plugins/ram-guard/scripts/ram-guard.sh\" session gemini", "timeout": 10000 }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${extensionPath}/plugins/ram-guard/scripts/ram-guard.sh\" session gemini",
+            "timeout": 10000,
+            "name": "ram-guard-session"
+          }
+        ]
+      }
     ],
     "BeforeTool": [
-      { "matcher": "run_shell_command", "hooks": [{ "type": "command", "name": "ram-guard-pre", "command": "\"${extensionPath}/plugins/ram-guard/scripts/ram-guard.sh\" pre gemini", "timeout": 150000 }] }
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${extensionPath}/plugins/ram-guard/scripts/ram-guard.sh\" pre gemini",
+            "timeout": 150000,
+            "name": "ram-guard-pre"
+          }
+        ]
+      }
     ],
     "AfterTool": [
-      { "matcher": "run_shell_command", "hooks": [{ "type": "command", "name": "ram-guard-post", "command": "\"${extensionPath}/plugins/ram-guard/scripts/ram-guard.sh\" post gemini", "timeout": 10000 }] }
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${extensionPath}/plugins/ram-guard/scripts/ram-guard.sh\" post gemini",
+            "timeout": 10000,
+            "name": "ram-guard-post"
+          }
+        ]
+      }
     ]
   }
 }

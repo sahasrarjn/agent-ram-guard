@@ -86,86 +86,28 @@ Every install method gives the agent these rules at the start of a session (with
 
 ## Manual setup
 
-What the installer writes, if you would rather edit the files yourself.
+To edit config files yourself, print the exact hooks for a tool and merge them in:
 
-
-Claude Code, in `~/.claude/settings.json` (merge into any existing `hooks` block):
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh session", "timeout": 10 }] }
-    ],
-    "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh pre", "timeout": 150, "statusMessage": "Checking RAM..." }] }
-    ],
-    "PostToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh post", "timeout": 10 }] }
-    ]
-  }
-}
+```bash
+ram-guard.sh config claude    # also: codex (TOML), cursor, gemini, antigravity
 ```
 
-Codex, in `~/.codex/config.toml`, with the absolute path to the script, then trust them with `/hooks`:
+Pass the script path as a second argument if it is not where the command runs from, e.g. `ram-guard.sh config codex ~/.local/bin/ram-guard.sh`. Codex needs an absolute path. This is the same output the installer merges and the plugin's hook files are generated from.
 
-```toml
-[[hooks.SessionStart]]
-[[hooks.SessionStart.hooks]]
-type = "command"
-command = "/Users/<you>/.local/bin/ram-guard.sh session"
-timeout = 10
+A few details worth knowing:
 
-[[hooks.PreToolUse]]
-matcher = "Bash"
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "/Users/<you>/.local/bin/ram-guard.sh pre"
-timeout = 150
-statusMessage = "Checking RAM..."
+- Keep the `pre` hook's timeout above `RAM_WAIT_SECS` so it can finish waiting. The generated configs use `RAM_WAIT_SECS + 30`.
+- Antigravity's `PostToolUse` hooks cannot talk to the agent, so the warning runs on `PreInvocation` instead.
+- Antigravity blocks the tool call when a `PreToolUse` hook fails, so make sure `jq` is installed.
 
-[[hooks.PostToolUse]]
-matcher = "Bash"
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = "/Users/<you>/.local/bin/ram-guard.sh post"
-timeout = 10
-```
-
-Cursor, in `~/.cursor/hooks.json`:
-
-```json
-{
-  "version": 1,
-  "hooks": {
-    "sessionStart": [{ "command": "~/.local/bin/ram-guard.sh session cursor", "timeout": 10 }],
-    "beforeShellExecution": [{ "command": "~/.local/bin/ram-guard.sh pre cursor", "timeout": 150 }],
-    "postToolUse": [{ "matcher": "Shell", "command": "~/.local/bin/ram-guard.sh post cursor", "timeout": 10 }]
-  }
-}
-```
-
-Antigravity, in `~/.gemini/config/hooks.json` (its `PostToolUse` hooks cannot talk to the agent, so the warning runs on `PreInvocation`, throttled the same way). `SessionStart` and `PreInvocation` take a flat list of handlers, not `matcher`/`hooks` groups. Antigravity blocks the tool call when a `PreToolUse` hook fails, so make sure `jq` is installed:
-
-```json
-{
-  "ram-guard": {
-    "SessionStart": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh session antigravity", "timeout": 10 }],
-    "PreToolUse": [{ "matcher": "run_command", "hooks": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh pre antigravity", "timeout": 150 }] }],
-    "PreInvocation": [{ "type": "command", "command": "~/.local/bin/ram-guard.sh post antigravity", "timeout": 10 }]
-  }
-}
-```
-
-Any other tool with command hooks: call `ram-guard.sh pre|post|session <format>`, where format is `claude` (default, also Codex), `cursor`, `gemini` or `antigravity`. The script reads the command from `tool_input.command`, `command` or `toolCall.args.CommandLine`.
-
-In every tool, keep the `pre` timeout above `RAM_WAIT_SECS` so the hook can finish waiting.
+For any other tool with command hooks, call `ram-guard.sh pre|post|session <format>`, where format is `claude` (default, also Codex), `cursor`, `gemini` or `antigravity`. The script reads the command from `tool_input.command`, `command` or `toolCall.args.CommandLine`.
 
 ## Manual use
 
 ```bash
 ram-guard.sh status   # used %, swap, top 8 processes
 ram-guard.sh top      # top 10 processes
+ram-guard.sh rules    # the RAM rules agents get at session start
 ```
 
 With the plugin, the script lives in the tool's plugin cache; ask the agent for the path, since its RAM rules name it. With `install.sh`, it is `~/.local/bin/ram-guard.sh`.
@@ -189,14 +131,34 @@ Set these as environment variables in the environment your agent runs in (for Cl
 | `RAM_BLOCK_SWAP_GB` | 7 | Block when swap reaches this many GB... |
 | `RAM_SWAP_BLOCK_MIN_USED_PCT` | 85 | ...and used % is at least this |
 | `RAM_GUARD_LOG` | `~/.local/state/ram-guard/ram-log.tsv` | Where samples are logged |
+| `RAM_GUARD_HEAVY_EXTRA` | (none) | Extra heavy-command patterns |
+| `RAM_GUARD_HEAVY` | (built-in list) | Replaces the heavy-command patterns |
 
-Which commands count as heavy is the `HEAVY` regex near the top of `plugins/ram-guard/scripts/ram-guard.sh`. Commands that only inspect or stop things (`grep`, `cat`, `git`, `kill`, `docker stop`, ...) are never held. Edit the regex to fit your stack.
+### Which commands are heavy
+
+The default list covers the common dev, test, build and serve commands across ecosystems: JavaScript package managers and tools (`npm test`, `pnpm dev`, `next`, `vite`, `jest`, `playwright`, `turbo`, `nx`, `webpack`, `tsc`), Python (`pytest`, `uvicorn`, `gunicorn`, `jupyter`, scripts named like `train*.py`, `torchrun`), containers (`docker compose up`, `docker build`), Go, Rust, JVM (`mvn`, `gradle`, `./gradlew`), .NET, Swift/Xcode, Bazel, Flutter, Ruby, PHP, Elixir, `make` and local LLM servers (`ollama`, `vllm`). The exact patterns are `DEFAULT_HEAVY` at the top of `ram-guard.sh`.
+
+It cannot know your own commands. Add them with a regex (extended syntax, matched where a word starts):
+
+```bash
+export RAM_GUARD_HEAVY_EXTRA='python .*etl\.py|my-server|bin/worker'
+```
+
+or replace the whole list with `RAM_GUARD_HEAVY`. Commands that only inspect or stop things (`ls`, `cat`, `grep`, `git`, `kill`, `docker ps`, ...) and anything run with `--version` or `--help` are never held.
+
+Only the hold-and-deny step depends on this list. The session rules and the post-command warning apply to every shell command.
 
 ## Uninstall
 
 Plugin: `claude plugin uninstall ram-guard@agent-ram-guard`, `codex plugin remove ram-guard@agent-ram-guard`, `pi remove git:github.com/sahasrarjn/agent-ram-guard`, `gemini extensions uninstall agent-ram-guard`.
 
 `install.sh` or manual setup: remove the `ram-guard.sh` entries from `~/.claude/settings.json`, `~/.codex/config.toml` and `~/.cursor/hooks.json`, and the `ram-guard` key from `~/.gemini/config/hooks.json`, then `rm ~/.local/bin/ram-guard.sh`. Older versions of these instructions had you paste the RAM rules into `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`; delete that `# RAM` section too.
+
+## Development
+
+- `plugins/ram-guard/scripts/ram-guard.sh` is the only place behavior and hook configs are defined.
+- `package.json` holds the name, version and description. `make sync` copies them into the other manifests and regenerates the plugin and Gemini hook files from `ram-guard.sh config`. Do not edit those generated files by hand.
+- `make lint` runs shellcheck, `make test` runs `tests/test.sh` (heavy-command cases, every hook format, configs, the installer in a temporary home), and `make check` fails if generated files are stale. CI runs all three on macOS.
 
 ## License
 
